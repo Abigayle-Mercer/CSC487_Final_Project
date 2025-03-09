@@ -1,118 +1,97 @@
 import os
-import torch
+import json
 import cv2
 import numpy as np
-import json
-from torchvision import transforms
-from glob import glob
 import re
-from PIL import Image
 
-# Paths
-VIDEO_DIR = "data/videos/"
-CAPTION_DIR = "data/captions/"
-OUTPUT_DIR = "data/frames/"
+# Define directories
+data_dir = "data"
+videos_dir = os.path.join(data_dir, "videos")
+captions_dir = os.path.join(data_dir, "captions")
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Ensure directories exist
+os.makedirs(videos_dir, exist_ok=True)
+os.makedirs(captions_dir, exist_ok=True)
 
-# CLIP Preprocessing
-clip_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.481, 0.457, 0.408), (0.268, 0.261, 0.275))
-])
+# Function to convert timestamp "hh:mm:ss,ms" to seconds
+def timestamp_to_seconds(timestamp):
+    h, m, s = timestamp.replace(',', '.').split(':')
+    return int(h) * 3600 + int(m) * 60 + float(s)
 
-def time_to_frames(time_str, fps=30):
-    """Converts timestamp (HH:MM:SS,ms) to frame index."""
-    match = re.match(r"(\d+):(\d+):(\d+),(\d+)", time_str)
-    if not match:
-        raise ValueError(f"Invalid time format: {time_str}")
-
-    hours, minutes, seconds, milliseconds = map(int, match.groups())
-    total_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000
-    return int(total_seconds * fps)
-
-def extract_frames(video_path, timestamps, num_frames=5):
-    """Extracts frames from video at given timestamps, ensuring at least 5 frames per caption."""
+# Function to get the video's frame rate (FPS)
+def get_video_fps(video_path):
     cap = cv2.VideoCapture(video_path)
-    all_frames = []
-    frame_metadata = []
+    if not cap.isOpened():
+        print(f"Error: Could not open video {video_path}")
+        return None
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    return fps
 
-    for start_time, end_time in timestamps:
-        start_idx = time_to_frames(start_time)
-        end_idx = time_to_frames(end_time)
+# Function to extract the YouTube video ID from filenames
+def extract_video_id(filename):
+    match = re.search(r"\[([A-Za-z0-9_-]+)\]", filename)  # Extracts text inside brackets [videoID]
+    return match.group(1) if match else None
 
-        # Skip if fewer than 5 unique frames can be extracted
-        if (end_idx - start_idx) < num_frames:
-            print(f"⏩ Skipping caption ({start_time} - {end_time}): Not enough frames ({end_idx - start_idx} available).")
-            continue
+# Function to calculate frame indices for each caption
+def extract_frame_indices(video_path, caption_data, num_frames=5):
+    fps = get_video_fps(video_path)
+    if fps is None:
+        return caption_data  # Skip this video if FPS couldn't be determined
 
-        frame_idxs = np.linspace(start_idx, end_idx, num_frames, dtype=int)
-        frame_idxs = sorted(set(frame_idxs))  # Ensure unique frames
+    updated_captions = []
+    cap = cv2.VideoCapture(video_path)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    video_duration = frame_count / fps  # Total duration in seconds
 
-        frames_for_caption = []
-        print(f"⏳ Extracting {len(frame_idxs)} frames for caption: {start_time} - {end_time}")
-        
-        for idx in frame_idxs:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame = cap.read()
-            if ret:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame = Image.fromarray(frame)
-                tensor = clip_transform(frame)
-                frames_for_caption.append(tensor)
-            else:
-                print(f"❌ Failed to extract frame {idx} from {video_path}")
+    for entry in caption_data:
+        start_sec = timestamp_to_seconds(entry["start_time"])
+        end_sec = timestamp_to_seconds(entry["end_time"])
 
-        # Only save if exactly 5 frames were extracted
-        if len(frames_for_caption) == num_frames:
-            all_frames.extend(frames_for_caption)
-            frame_metadata.append(frame_idxs)
-            print(f"   ✅ Stored {len(frames_for_caption)} frames for caption: {start_time} - {end_time}")
+        if end_sec > video_duration:
+            end_sec = video_duration  # Prevent going beyond video length
+
+        # Convert to frame indices
+        start_frame = int(start_sec * fps)
+        end_frame = int(end_sec * fps)
+
+        if end_frame > frame_count:
+            end_frame = frame_count - 1  # Adjust if beyond video length
+
+        # Ensure enough frames exist
+        if end_frame - start_frame >= num_frames:
+            frame_indices = np.linspace(start_frame, end_frame, num_frames, dtype=int).tolist()
+        else:
+            frame_indices = list(range(start_frame, min(start_frame + num_frames, end_frame + 1)))
+
+        entry["frames"] = frame_indices
+        updated_captions.append(entry)
 
     cap.release()
-    
-    if all_frames:
-        print(f"✅ Total frames extracted from {video_path}: {len(all_frames)}")
-        return torch.stack(all_frames), frame_metadata
+    return updated_captions
+
+# Process videos and captions by matching YouTube IDs
+video_files = {extract_video_id(f): f for f in os.listdir(videos_dir) if extract_video_id(f) and f.endswith(".mp4")}
+caption_files = {extract_video_id(f): f for f in os.listdir(captions_dir) if extract_video_id(f) and f.endswith(".json")}
+
+for video_id, video_file in video_files.items():
+    if video_id in caption_files:
+        video_path = os.path.join(videos_dir, video_file)
+        caption_file = caption_files[video_id]
+        caption_path = os.path.join(captions_dir, caption_file)
+
+        print(f"Processing: {video_file} -> {caption_file}")
+
+        with open(caption_path, "r", encoding="utf-8") as f:
+            captions = json.load(f)
+
+        # Extract frame indices
+        captions_with_frames = extract_frame_indices(video_path, captions)
+
+        # Save updated captions
+        with open(caption_path, "w", encoding="utf-8") as f:
+            json.dump(captions_with_frames, f, indent=4, ensure_ascii=False)
     else:
-        print(f"❌ No valid captions found for {video_path}")
-        return None, None
+        print(f"WARNING: No matching caption file found for video ID {video_id}")
 
-
-def process_video(video_path):
-    """Processes a video, extracts frames, and stores tensors with metadata efficiently."""
-    video_id = os.path.splitext(os.path.basename(video_path))[0]
-    caption_file = os.path.join(CAPTION_DIR, f"{video_id}.en.json")
-
-    with open(caption_file, "r") as f:
-        captions = json.load(f)
-
-    timestamps = [(c["start_time"], c["end_time"]) for c in captions]
-
-    # Extract frames
-    frame_tensors, frame_metadata = extract_frames(video_path, timestamps)
-
-    if frame_tensors is not None:
-        # Convert to float16 (saves space)
-        frame_tensors = frame_tensors.half()
-
-        save_path = os.path.join(OUTPUT_DIR, f"{video_id}.pt")
-        
-        # Prevent corruption by forcing legacy PyTorch format
-        torch.save(
-            {"frames": frame_tensors, "timestamps": frame_metadata},
-            save_path,
-            _use_new_zipfile_serialization=False  # ✅ Fixes corruption issue
-        )
-
-        print(f"✅ Successfully saved: {save_path} with {frame_tensors.shape[0]} frames")
-    else: 
-        print("❌ No valid frames extracted, skipping save.")
-
-# Process all videos
-for video_file in glob(os.path.join(VIDEO_DIR, "*.mkv")):
-    print(f"📂 Processing: {video_file}")
-    process_video(video_file)
-
-
+print("Frame index extraction complete! JSON files now include frame indices.")

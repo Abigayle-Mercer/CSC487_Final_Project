@@ -1,41 +1,76 @@
-import torch
-import matplotlib.pyplot as plt
+import os
+import json
+import cv2
+import re
 
-import torch
+# Define directories
+data_dir = "data"
+videos_dir = os.path.join(data_dir, "videos")
+captions_dir = os.path.join(data_dir, "captions")
 
-tensor_file = "data/tensors/Cal Poly Survivor： S3 E8： Like a Mob Boss [jJePD7jcNBQ].pt"
+# Function to extract YouTube video ID from filename
+def extract_video_id(filename):
+    match = re.search(r"\[([A-Za-z0-9_-]+)\]", filename)  # Extracts text inside brackets [videoID]
+    return match.group(1) if match else None
 
-try:
-    # Explicitly disable "weights only" mode
-    data = torch.load(tensor_file, map_location="cpu", weights_only=False)
+# Get first available video file
+video_files = [f for f in os.listdir(videos_dir) if f.endswith(".mp4")]
+if not video_files:
+    print("No video files found!")
+    exit()
 
-    print("✅ Successfully loaded the .pt file!")
-    print(f"Keys: {data.keys()}")
-    print(f"Frames shape: {data['frames'].shape}")  # Should be (N, 3, 224, 224)
-    print(f"Timestamps count: {len(data['timestamps'])}")  # Should match caption count
+video_file = video_files[0]  # Grab the first video
+video_path = os.path.join(videos_dir, video_file)
 
-except Exception as e:
-    print(f"❌ Failed to load .pt file: {e}")
+# Find corresponding caption file
+video_id = extract_video_id(video_file)
+if not video_id:
+    print(f"Could not extract video ID from {video_file}")
+    exit()
+
+caption_file = next((f for f in os.listdir(captions_dir) if video_id in f and f.endswith(".json")), None)
+if not caption_file:
+    print(f"No matching caption file found for {video_file}")
+    exit()
+
+caption_path = os.path.join(captions_dir, caption_file)
+
+# Load the caption JSON
+with open(caption_path, "r", encoding="utf-8") as f:
+    captions = json.load(f)
+
+# Grab the first timestamp and its frames
+if not captions:
+    print("Caption file is empty!")
+    exit()
+
+first_entry = captions[0]
+start_time = first_entry["start_time"]
+end_time = first_entry["end_time"]
+caption_text = first_entry["caption"]
+frame_indices = first_entry.get("frames", [])
+
+if not frame_indices:
+    print("No frame indices found in the first caption entry!")
+    exit()
+
+print(f"\nSanity Check: {video_file}")
+print(f"Caption: \"{caption_text}\"")
+print(f"Timestamp: {start_time} → {end_time}")
+print(f"Frame Indices: {frame_indices}")
 
 
-frames = data["frames"]  # (total_frames, 3, 224, 224)
-timestamps = data["timestamps"]  # List of frame index lists
+cap = cv2.VideoCapture(video_path)
 
-# Select a caption index
-caption_idx = 0
-frame_indices = timestamps[caption_idx]
-print(f"📌 Caption {caption_idx} uses frame indices: {frame_indices}")
+for frame_idx in frame_indices:
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    
+    if ret:
+        cv2.imshow(f"Frame {frame_idx}", frame)
+        cv2.waitKey(500)  # Display each frame for 500ms
+    else:
+        print(f"❌ Failed to retrieve frame {frame_idx}")
 
-# Extract the frames
-frames_for_caption = frames[frame_indices]  # Shape: (5, 3, 224, 224)
-
-# Convert to NumPy and fix dtype
-frames_for_caption = frames_for_caption.permute(0, 2, 3, 1).cpu().numpy()  # (5, 224, 224, 3)
-frames_for_caption = frames_for_caption.astype("float32")  # ✅ Convert to float32
-
-# Display the frames
-fig, axes = plt.subplots(1, len(frames_for_caption), figsize=(15, 5))
-for i, img in enumerate(frames_for_caption):
-    axes[i].imshow(img * 0.5 + 0.5)  # Undo normalization for display
-    axes[i].axis("off")
-plt.show()
+cap.release()
+cv2.destroyAllWindows()
