@@ -45,6 +45,27 @@ CAPS = [
     "data/captions/Cal Poly Survivor： S3 E12： Super Idol! [K-J0ticRXnM].en.json",
 ]
 
+PLAYERS = [
+    "Gippy",
+    "Amanda",
+    "Melena",
+    "Lindsey",
+    "Brenna",
+    "Troy",
+    "Nic",
+    "Lexie",
+    "Tymon",
+    "Drew",
+    "Rachel",
+    "Korte",
+    "Brooke",
+    "Lizeth",
+    "Pratham",
+    "Sean",
+    "Jada",
+    "Liam"
+]
+
 #helper functions:
 def time_to_seconds(time_str):
     """Convert timestamp from 'HH:MM:SS,ms' to total seconds."""
@@ -130,8 +151,16 @@ def use_model(ep_id, timestamp, caption_options, include_real=True):
     image_features = model.encode_image(frame)
     text_features = model.encode_text(text_tok)
 
-    for t, closeness in zip(texts, clip_dot(image_features, text_features).tolist()[0]):
+    for t, closeness in sorted(zip(texts, clip_dot(image_features, text_features).tolist()[0]),
+                               key = lambda x: x[1]):
         print(f"P(text): {round(closeness,3)} | '{t}'")
+
+
+def name_fill(prev, last):
+    output = []
+    for name in PLAYERS:
+        output.append(f"{prev}{name}{last}")
+    return output
 
 #load the model architecture
 device = "cpu"#"cuda" if torch.cuda.is_available() else "cpu"
@@ -144,16 +173,19 @@ os.makedirs(save_dir, exist_ok=True)
 checkpoint_path = os.path.join(save_dir, f"clip_overnight.pt")
 checkpoint = torch.load(checkpoint_path)
 
-model.load_state_dict(checkpoint["model_state_dict"])
+#model.load_state_dict(checkpoint["model_state_dict"])
 model.to(device=device)
 model.eval()
 
 if __name__ == "__main__":
+
+
+
     use_model(
-        0, "00:19:05,000",
-        ["I like Rachel", "I do not like Rachel",
-         "I like Abby", "I do not like Abby",
-         "I like Scott", "I do not like Scott",
-         "I like Nick", "I do not like Nick"],
-         include_real=False
+        10, "00:22:17,000",
+        #name_fill("I want ", " out."),
+        ["womanizer I called him a misogynist I mean both are bad but I stand by that",
+         "like immediately after tribal I turned to her and I'm like bro like like I can't tell you anything like it doesn't",
+         "Drew tried really hard to save every a profit Rachel same thing but there were just not enough people who were down for"],
+         include_real=True
     )
